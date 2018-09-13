@@ -26,50 +26,73 @@ import RxCocoa
 import Kingfisher
 
 class ActivityController: UITableViewController {
-
-  private let repo = "ReactiveX/RxSwift"
-
-  private let events = Variable<[Event]>([])
-  private let bag = DisposeBag()
-
-  override func viewDidLoad() {
-    super.viewDidLoad()
-    title = repo
-
-    self.refreshControl = UIRefreshControl()
-    let refreshControl = self.refreshControl!
-
-    refreshControl.backgroundColor = UIColor(white: 0.98, alpha: 1.0)
-    refreshControl.tintColor = UIColor.darkGray
-    refreshControl.attributedTitle = NSAttributedString(string: "Pull to refresh")
-    refreshControl.addTarget(self, action: #selector(refresh), for: .valueChanged)
-
-    refresh()
-  }
-
-  @objc func refresh() {
-    DispatchQueue.global(qos: .background).async { [weak self] in
-      guard let strongSelf = self else { return }
-      strongSelf.fetchEvents(repo: strongSelf.repo)
+    
+    private let repo = "ReactiveX/RxSwift"
+    
+    private let events = Variable<[Event]>([])
+    private let bag = DisposeBag()
+    
+    override func viewDidLoad() {
+        super.viewDidLoad()
+        title = repo
+        
+        self.refreshControl = UIRefreshControl()
+        let refreshControl = self.refreshControl!
+        
+        refreshControl.backgroundColor = UIColor(white: 0.98, alpha: 1.0)
+        refreshControl.tintColor = UIColor.darkGray
+        refreshControl.attributedTitle = NSAttributedString(string: "Pull to refresh")
+        refreshControl.addTarget(self, action: #selector(refresh), for: .valueChanged)
+        
+        refresh()
     }
-  }
-
-  func fetchEvents(repo: String) {
-
-  }
-
-  // MARK: - Table Data Source
-  override func tableView(_ tableView: UITableView, numberOfRowsInSection section: Int) -> Int {
-    return events.value.count
-  }
-
-  override func tableView(_ tableView: UITableView, cellForRowAt indexPath: IndexPath) -> UITableViewCell {
-    let event = events.value[indexPath.row]
-
-    let cell = tableView.dequeueReusableCell(withIdentifier: "Cell")!
-    cell.textLabel?.text = event.name
-    cell.detailTextLabel?.text = event.repo + ", " + event.action.replacingOccurrences(of: "Event", with: "").lowercased()
-    cell.imageView?.kf.setImage(with: event.imageUrl, placeholder: UIImage(named: "blank-avatar"))
-    return cell
-  }
+    
+    @objc func refresh() {
+        DispatchQueue.global(qos: .background).async { [weak self] in
+            guard let strongSelf = self else { return }
+            strongSelf.fetchEvents(repo: strongSelf.repo)
+        }
+    }
+    
+    func processEvents(_ newEvents: [Event]) {
+        var updateEvents = newEvents + events.value
+        if updateEvents.count > 50 {
+            updateEvents = Array(updateEvents.prefix(upTo: 50))
+        }
+        events.value = updateEvents
+        DispatchQueue.main.async {
+            self.tableView.reloadData()
+            self.refreshControl?.endRefreshing()
+        }
+    }
+    
+    func fetchEvents(repo: String) {
+        let response = Observable.from([repo])
+            .map { URL(string: "https://api.github.com/repos/\($0)/events")! }
+            .map { URLRequest(url: $0) }
+            .flatMap { URLSession.shared.rx.response(request: $0) }
+            .share(replay: 1, scope: .whileConnected)
+        response
+            .filter { r, _ in 200..<300 ~= r.statusCode }
+            .map { _, d in (try? JSONSerialization.jsonObject(with: d)) as? [[String: Any]] ?? [] }
+            .filter { $0.count > 0 }
+            .map { $0.compactMap(Event.init) }
+            .subscribe(onNext: { [weak self] in self?.processEvents($0) })
+            .disposed(by: bag)
+    }
+    
+    // MARK: - Table Data Source
+    override func tableView(_ tableView: UITableView, numberOfRowsInSection section: Int) -> Int {
+        return events.value.count
+    }
+    
+    override func tableView(_ tableView: UITableView, cellForRowAt indexPath: IndexPath) -> UITableViewCell {
+        let event = events.value[indexPath.row]
+        
+        let cell = tableView.dequeueReusableCell(withIdentifier: "Cell")!
+        cell.textLabel?.text = event.name
+        cell.detailTextLabel?.text = event.repo + ", " + event.action.replacingOccurrences(of: "Event", with: "").lowercased()
+        cell.imageView?.kf.setImage(with: event.imageUrl, placeholder: UIImage(named: "blank-avatar"))
+        return cell
+    }
 }
