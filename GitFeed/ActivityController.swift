@@ -25,10 +25,17 @@ import RxSwift
 import RxCocoa
 import Kingfisher
 
+func cachedFileURL(_ fileName: String) -> URL {
+    return FileManager.default
+        .urls(for: .cachesDirectory, in: .allDomainsMask)
+        .first!
+        .appendingPathComponent(fileName)
+}
+
 class ActivityController: UITableViewController {
     
     private let repo = "ReactiveX/RxSwift"
-    
+    private let eventsFileURL = cachedFileURL("events.plist")
     private let events = Variable<[Event]>([])
     private let bag = DisposeBag()
     
@@ -43,6 +50,9 @@ class ActivityController: UITableViewController {
         refreshControl.tintColor = UIColor.darkGray
         refreshControl.attributedTitle = NSAttributedString(string: "Pull to refresh")
         refreshControl.addTarget(self, action: #selector(refresh), for: .valueChanged)
+        
+        let eventsArray = (NSArray(contentsOf: eventsFileURL) as? [[String: Any]]) ?? []
+        events.value = eventsArray.compactMap(Event.init)
         
         refresh()
     }
@@ -64,6 +74,8 @@ class ActivityController: UITableViewController {
             self.tableView.reloadData()
             self.refreshControl?.endRefreshing()
         }
+        let eventsArray = updateEvents.map { $0.dictionary } as NSArray
+        eventsArray.write(to: eventsFileURL, atomically: true)
     }
     
     func fetchEvents(repo: String) {
