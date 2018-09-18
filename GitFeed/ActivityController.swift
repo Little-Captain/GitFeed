@@ -35,8 +35,10 @@ func cachedFileURL(_ fileName: String) -> URL {
 class ActivityController: UITableViewController {
     
     private let repo = "ReactiveX/RxSwift"
+    private let modifiedFileURL = cachedFileURL("modified.txt")
     private let eventsFileURL = cachedFileURL("events.plist")
     private let events = Variable<[Event]>([])
+    private let lastModified = Variable<NSString?>(nil)
     private let bag = DisposeBag()
     
     override func viewDidLoad() {
@@ -53,6 +55,8 @@ class ActivityController: UITableViewController {
         
         let eventsArray = (NSArray(contentsOf: eventsFileURL) as? [[String: Any]]) ?? []
         events.value = eventsArray.compactMap(Event.init)
+        
+        lastModified.value = try? NSString(contentsOf: modifiedFileURL, usedEncoding: nil)
         
         refresh()
     }
@@ -81,15 +85,37 @@ class ActivityController: UITableViewController {
     func fetchEvents(repo: String) {
         let response = Observable.from([repo])
             .map { URL(string: "https://api.github.com/repos/\($0)/events")! }
-            .map { URLRequest(url: $0) }
+            .map { [weak self] in
+                var request = URLRequest(url: $0)
+                if let modifiedHeader = self?.lastModified.value {
+                    request.addValue(modifiedHeader as String, forHTTPHeaderField: "Last-Modified")
+                }
+                return request
+            }
             .flatMap { URLSession.shared.rx.response(request: $0) }
             .share(replay: 1, scope: .whileConnected)
+        
         response
             .filter { r, _ in 200..<300 ~= r.statusCode }
             .map { _, d in (try? JSONSerialization.jsonObject(with: d)) as? [[String: Any]] ?? [] }
             .filter { $0.count > 0 }
             .map { $0.compactMap(Event.init) }
             .subscribe(onNext: { [weak self] in self?.processEvents($0) })
+            .disposed(by: bag)
+        
+        response
+            .filter { r, _ in 200..<400 ~= r.statusCode }
+            .flatMap { r, _ -> Observable<NSString> in
+                guard let value = r.allHeaderFields["Last-Modified"] as? NSString else {
+                    return Observable.empty()
+                }
+                return Observable.just(value)
+            }
+            .subscribe(onNext: { [weak self] modifiedHeader in
+                guard let `self` = self else { return }
+                self.lastModified.value = modifiedHeader
+                try? modifiedHeader.write(to: self.modifiedFileURL, atomically: true, encoding: String.Encoding.utf8.rawValue)
+            })
             .disposed(by: bag)
     }
     
