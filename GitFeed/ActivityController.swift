@@ -83,7 +83,15 @@ class ActivityController: UITableViewController {
     }
     
     func fetchEvents(repo: String) {
-        let response = Observable.from([repo])
+        let response = Observable.from(["https://api.github.com/search/repositories?q=language:swift&per_page=5"])
+            .map { URL(string: $0)! }
+            .flatMap { URLSession.shared.rx.json(url: $0) }
+            .flatMap { r -> Observable<String> in
+                guard let r = r as? [String: Any], let items = r["items"] as? [[String: Any]] else {
+                    return Observable.empty()
+                }
+                return Observable.from(items.compactMap({ $0["full_name"] as? String }))
+            }
             .map { URL(string: "https://api.github.com/repos/\($0)/events")! }
             .map { [weak self] in
                 var request = URLRequest(url: $0)
@@ -94,7 +102,7 @@ class ActivityController: UITableViewController {
             }
             .flatMap { URLSession.shared.rx.response(request: $0) }
             .share(replay: 1, scope: .whileConnected)
-        
+
         response
             .filter { r, _ in 200..<300 ~= r.statusCode }
             .map { _, d in (try? JSONSerialization.jsonObject(with: d)) as? [[String: Any]] ?? [] }
@@ -102,7 +110,7 @@ class ActivityController: UITableViewController {
             .map { $0.compactMap(Event.init) }
             .subscribe(onNext: { [weak self] in self?.processEvents($0) })
             .disposed(by: bag)
-        
+
         response
             .filter { r, _ in 200..<400 ~= r.statusCode }
             .flatMap { r, _ -> Observable<NSString> in
